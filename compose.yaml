@@ -1,0 +1,108 @@
+# Project name used for Docker resources created by this configuration.
+name: isec6000-assessment2
+
+services:
+  # Docker-in-Docker provides an isolated Docker daemon for Jenkins.
+  docker:
+    image: docker:dind
+    container_name: jenkins-docker
+    restart: unless-stopped
+
+    # Privileged mode is required by the Docker-in-Docker service.
+    # Jenkins itself is not given privileged access.
+    privileged: true
+
+    environment:
+      # Generate TLS certificates for authenticated communication.
+      DOCKER_TLS_CERTDIR: /certs
+
+    command:
+      - --storage-driver=overlay2
+
+    volumes:
+      # Share the generated Docker client certificates with Jenkins.
+      - jenkins-docker-certs:/certs/client
+
+      # Make the Jenkins workspace visible to Docker agent containers.
+      - jenkins-data:/var/jenkins_home
+
+    networks:
+      jenkins:
+        aliases:
+          - docker
+
+    healthcheck:
+      test: ["CMD-SHELL", "docker info >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # Jenkins controller runs the pipeline and communicates with DinD using TLS.
+  jenkins:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    image: isec6000-jenkins:2.568.3
+    container_name: jenkins-controller
+    restart: unless-stopped
+
+    depends_on:
+      docker:
+        condition: service_healthy
+
+    environment:
+      # Address of the isolated Docker-in-Docker daemon.
+      DOCKER_HOST: tcp://docker:2376
+
+      # Location of the client certificates shared from DinD.
+      DOCKER_CERT_PATH: /certs/client
+
+      # Require certificate verification for Docker communication.
+      DOCKER_TLS_VERIFY: "1"
+
+      # Keep the secure Jenkins first-run setup wizard enabled.
+      JAVA_OPTS: >-
+        -Djenkins.install.runSetupWizard=true
+
+    ports:
+      # Bind Jenkins only to the server's loopback interface.
+      # It will be accessed securely through an SSH tunnel.
+      - "127.0.0.1:8080:8080"
+
+    volumes:
+      # Preserve Jenkins configuration, jobs, logs and workspaces.
+      - jenkins-data:/var/jenkins_home
+
+      # Jenkins needs read-only access to the Docker TLS certificates.
+      - jenkins-docker-certs:/certs/client:ro
+
+    networks:
+      - jenkins
+
+    # Explicitly run Jenkins with its non-root UID and GID.
+    user: "1000:1000"
+
+    # Prevent the Jenkins process from gaining additional privileges.
+    security_opt:
+      - no-new-privileges:true
+
+    # Remove unnecessary Linux capabilities from Jenkins.
+    cap_drop:
+      - ALL
+
+networks:
+  # Private bridge network used for Jenkins-to-DinD communication.
+  jenkins:
+    name: isec6000-jenkins-network
+    driver: bridge
+
+volumes:
+  # Persistent storage for Jenkins configuration, logs and workspaces.
+  jenkins-data:
+    name: isec6000-jenkins-data
+
+  # Persistent storage for Docker TLS client certificates.
+  jenkins-docker-certs:
+    name: isec6000-jenkins-docker-certs

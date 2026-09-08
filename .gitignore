@@ -1,0 +1,11 @@
+# Environment files may contain credentials
+.env
+
+# Local build and diagnostic logs
+*.log
+
+# Never commit secret material
+secrets/
+
+# Common local system files
+.DS_Store
